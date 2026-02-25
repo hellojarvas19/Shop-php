@@ -8,6 +8,7 @@ RUN mkdir -p /var/www/localhost/htdocs
 
 # Copy files
 COPY --chown=nginx:nginx api.php /var/www/localhost/htdocs/
+COPY --chown=nginx:nginx shop.txt /var/www/localhost/htdocs/
 COPY default.conf /etc/nginx/http.d/
 
 # Create startup script with full path to php-fpm
