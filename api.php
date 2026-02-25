@@ -92,6 +92,59 @@ function get_random_site(): string {
 }
 
 /**
+ * Get a random site excluding given sites
+ */
+function get_random_site_excluding(array $exclude_sites): string {
+    static $sites = null;
+    
+    if ($sites === null) {
+        $sites = load_sites_from_file('shop.txt');
+    }
+    
+    if (empty($sites)) {
+        return '';
+    }
+    
+    $available_sites = array_diff($sites, $exclude_sites);
+    
+    if (empty($available_sites)) {
+        return '';
+    }
+    
+    return array_values($available_sites)[array_rand(array_values($available_sites))];
+}
+
+/**
+ * Check if product price is under $20
+ */
+function is_price_acceptable(string $site): bool {
+    $shop = new ShopifyAuto();
+    
+    try {
+        $product_header = [
+            'accept: text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+            'accept-language: en-US,en;q=0.6',
+            'user-agent: ' . $shop->getUserAgent(),
+        ];
+
+        $product_response = $shop->httpGet($site . '/products.json', $product_header);
+        $products_data = json_decode($product_response['body'], true);
+        
+        if (!isset($products_data['products'][0])) {
+            return false;
+        }
+        
+        $price = floatval($products_data['products'][0]['variants'][0]['price'] ?? 0);
+        
+        // If price is under $20, return true
+        return $price < 20;
+        
+    } catch (Exception $e) {
+        return false;
+    }
+}
+
+/**
  * Generate random user agent
  */
 function get_random_user_agent(): string {
@@ -939,8 +992,36 @@ if ($method === 'GET' || $method === 'POST') {
     
     [$cc_num, $mon, $year, $cvv] = $card_parts;
     
-    // Process checkout
-    $result = processCheckout($site, $cc_num, $mon, $year, $cvv, $proxy);
+    // Track if user originally provided a site - if not, we'll auto-retry on high prices
+    $user_provided_site = !empty($_GET['site'] ?? '') || !empty($input['site'] ?? '');
+    
+    // Try checkout with retry logic for high prices (only when no specific site was provided)
+    $max_retries = 5;
+    $tried_sites = [];
+    
+    for ($attempt = 0; $attempt < $max_retries; $attempt++) {
+        // Track tried sites to avoid duplicates
+        $tried_sites[] = $site;
+        
+        // Process checkout
+        $result = processCheckout($site, $cc_num, $mon, $year, $cvv, $proxy);
+        
+        // Check if price is more than $20 and we should retry (only when user didn't specify a site)
+        $price_value = floatval($result['Price'] ?? 0);
+        
+        if (!$user_provided_site && $price_value >= 20 && $attempt < $max_retries - 1) {
+            // Get a new random site excluding already tried ones
+            $new_site = get_random_site_excluding($tried_sites);
+            
+            if (!empty($new_site)) {
+                $site = $new_site;
+                continue; // Retry with new site
+            }
+        }
+        
+        // Either price is under $20, or user provided a specific site, or we ran out of sites to try
+        break;
+    }
     
     echo json_encode($result);
 } else {
